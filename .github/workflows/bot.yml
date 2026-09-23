@@ -2,10 +2,8 @@ name: Ultimate Omni-Bot V21 Execution
 
 on:
   schedule:
-    # Berjalan setiap 15 menit, aktif Senin 05:00 WIB s.d Sabtu 05:00 WIB
-    # UTC: Senin 22:00 s.d Jumat 22:00 (WIB adalah UTC+7)
     - cron: '*/15 * * * 1-5'
-    - cron: '0 0-22/1 * * 6' # Eksekusi ekstra untuk mencakup jam operasional Sabtu pagi sebelum pukul 05:00 WIB
+    - cron: '0 0-22/1 * * 6'
   workflow_dispatch:
 
 jobs:
@@ -19,7 +17,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
 
       - name: Install Dependencies
         run: |
