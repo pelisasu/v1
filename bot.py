@@ -78,7 +78,6 @@ def save(p, d):
         pass
 
 def fetch_live_price_and_candles():
-    # Mengambil data harga live emas via API publik yang stabil untuk GitHub Actions
     try:
         res = requests.get("https://api.coinbase.com/v2/prices/PAXG-USD/spot", timeout=10)
         if res.status_code == 200:
@@ -108,18 +107,15 @@ def fetch_klines(limit=300):
     return df, base_price
 
 def kalman_filter_price(prices):
-    # Kalman Filter sederhana untuk meredam noise harga
     n = len(prices)
     filtered = np.zeros(n)
-    Q = 1e-5 # Process variance
-    R = 1e-2 # Measurement variance
+    Q = 1e-5 
+    R = 1e-2 
     xhat = prices[0]
     P = 1.0
     for i in range(n):
-        # Prediction
         xhatminus = xhat
         Pminus = P + Q
-        # Update
         K = Pminus / (Pminus + R)
         xhat = xhatminus + K * (prices[i] - xhatminus)
         P = (1 - K) * Pminus
@@ -167,7 +163,6 @@ def make_chart(df, entry, sl, t1, t2, t3, t4, signal, price, conviction, regime,
 
 def main():
     now = datetime.now(WIB)
-    # Aturan Waktu: Senin 05:00 s.d Sabtu 05:00 WIB
     if now.weekday() == 5 and now.hour >= 5:
         log("🛡️ Market Tutup (Weekend Rule). Bot Standby.")
         return 0
@@ -183,9 +178,8 @@ def main():
     
     regime = analyze_market_regime(df)
     
-    # Perhitungan Core Model
     macro_score = 1.0 if df["close"].iloc[-1] > df["close"].rolling(50).mean().iloc[-1] else -1.0
-    exec_score = 0.8 if df["close"].iloc[-1] > df["kalman"][-1] else -0.5
+    exec_score = 0.8 if df["close"].iloc[-1] > kf_prices[-1] else -0.5
     
     conviction = float(min(100.0, abs(macro_score * 40 + exec_score * 60)))
     signal = "BUY" if (macro_score + exec_score) > 0 else "SELL"
@@ -196,7 +190,7 @@ def main():
     sl_dyn = max(4.0, round(atr_val * 1.2, 2))
     tp1_dyn = round(sl_dyn * 1.5, 2)
     tp2_dyn = round(sl_dyn * 2.5, 2)
-    tp3_dyn = round(sl_dyn * 4.0, 2) # Minimal target > 50 poin / pips equivalent
+    tp3_dyn = round(sl_dyn * 4.0, 2)
     tp4_dyn = round(sl_dyn * 6.0, 2)
 
     entry = price
