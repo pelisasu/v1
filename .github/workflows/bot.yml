@@ -1,0 +1,42 @@
+name: Ultimate Omni-Bot V21 Execution
+
+on:
+  schedule:
+    # Berjalan setiap 15 menit, aktif Senin 05:00 WIB s.d Sabtu 05:00 WIB
+    # UTC: Senin 22:00 s.d Jumat 22:00 (WIB adalah UTC+7)
+    - cron: '*/15 * * * 1-5'
+    - cron: '0 0-22/1 * * 6' # Eksekusi ekstra untuk mencakup jam operasional Sabtu pagi sebelum pukul 05:00 WIB
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy requests websocket-client matplotlib
+
+      - name: Run Algorithmic Trading Bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 bot.py
+
+      - name: Commit and Push State / Journal Changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update V21 DNA & trade history [skip ci]"
+          file_pattern: "*.json"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "41898282+github-actions[bot]@users.noreply.github.com"
