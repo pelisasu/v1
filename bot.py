@@ -1,22 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-OMNI-BOT v26.0 - GOLD (XAUUSD) QUANT ENGINE
+OMNI-BOT v26.1 - GOLD (XAUUSD) QUANT ENGINE
 --------------------------------------------
-Perbaikan besar dari v25:
-  1. DATA ASLI via yfinance (Spot + DXY) - TIDAK ada simulasi/hardcode.
-  2. FAIL-CLOSE: kalau data gagal, bot STOP & alert, bukan trading pakai data palsu.
-  3. Intermarket DXY + SMC (sweep & FVG) filter.
-  4. Wilder ATR (True Range) untuk SL.
-  5. % Risk position sizing (bukan lot mati).
-  6. Journal loop PnL: posisi lama di-recap otomatis (TP/SL).
-  7. Semua HTML-entity & threshold liar dibersihkan.
-
-Cara pakai:
-  pip install yfinance pandas numpy matplotlib requests pytz
-  export TELEGRAM_TOKEN="..."
-  export TELEGRAM_CHAT_ID="..."
-  python omni_bot.py --once            # jalan 1 siklus
+Perbaikan dari v26.0:
+  1. Memperbaiki FutureWarning/DeprecationWarning dari Pandas & NumPy.
+  2. Ekstraksi data menggunakan .values untuk menjamin tipe data scalar murni.
+  3. Menangani MultiIndex kolom dari yfinance secara otomatis.
 """
 
 import os
@@ -128,12 +118,21 @@ def fetch_ohlcv(symbol):
         if df is None or df.empty or len(df) < 100:
             log(f"data kosong untuk {symbol}")
             return None
+        
+        # Flatten MultiIndex columns if yfinance returns them
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
         df = df.rename(columns={
             "Open": "open", "High": "high",
             "Low": "low", "Close": "close", "Volume": "volume"
         })
         df = df[["open", "high", "low", "close", "volume"]].dropna()
-        # pastikan pakai bar terakhir (tail) -> waktu utk timezone lokal
+        
+        # Ensure all data is numeric to prevent type warnings
+        for col in ["open", "high", "low", "close", "volume"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
         df.index = pd.to_datetime(df.index).tz_localize(None)
         return df.tail(BARS)
     except Exception as e:
@@ -163,21 +162,28 @@ def get_market_data():
 # ---------------- Indicators ----------------
 def wilder_atr(df, n=14):
     """True Range + Wilder smoothing (ewm alpha=1/n)."""
+    high = df["high"].values
+    low = df["low"].values
+    close = df["close"].values
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    
     tr = np.maximum(
-        df["high"] - df["low"],
+        high - low,
         np.maximum(
-            (df["high"] - df["close"].shift()).abs(),
-            (df["low"] - df["close"].shift()).abs(),
+            np.abs(high - prev_close),
+            np.abs(low - prev_close),
         ),
     )
-    return float(tr.ewm(alpha=1 / n, adjust=False).mean().iloc[-1])
+    return float(pd.Series(tr).ewm(alpha=1 / n, adjust=False).mean().values[-1])
 
 
 def kalman_series(prices):
     """Kalman lebih masuk akal: noise skala sesuai harga, bukan konstanta liar."""
+    # Ensure prices is a flat 1D numpy array to avoid ndim > 0 warnings
+    prices = np.asarray(prices).flatten()
     n = len(prices)
     filtered = np.zeros(n)
-    # varian diukur dari data -> auto-skala
     Q = float(np.var(np.diff(prices))) * 0.01
     R = float(np.var(prices)) * 0.001
     xhat = float(prices[0])
@@ -193,42 +199,49 @@ def kalman_series(prices):
 
 def detect_sweep(df, lookback=20):
     """Liquidity sweep: wick nembus swing lalu ditolak balik struktur."""
-    last = df.iloc[-1]
+    last = df.iloc[-1].values
     prior = df.iloc[-lookback:-1]
     swing_hi = float(prior["high"].max())
     swing_lo = float(prior["low"].min())
-    close = float(last["close"])
-    if float(last["low"]) < swing_lo and close > swing_lo:
+    
+    # Columns: open=0, high=1, low=2, close=3, volume=4
+    close = float(last[3])
+    low = float(last[2])
+    high = float(last[1])
+    
+    if low < swing_lo and close > swing_lo:
         return "BUY"        # sweep bawah (stop hunt long) -> reversal naik
-    if float(last["high"]) > swing_hi and close < swing_hi:
+    if high > swing_hi and close < swing_hi:
         return "SELL"       # sweep atas (stop hunt short) -> reversal turun
     return None
 
 
 def detect_fvg(df, lookback=20):
     """Fair Value Gap bullish/bearish pada 3 candle terakhir area revisi."""
-    last3 = df.tail(3)
+    last3 = df.tail(3).values
     if len(last3) < 3:
         return None
-    c1, c2, c3 = last3.iloc[0], last3.iloc[1], last3.iloc[2]
-    if float(c3.low) > float(c1.high) and float(c2.close) > float(c1.close):
+    
+    # Columns: open=0, high=1, low=2, close=3, volume=4
+    c1, c2, c3 = last3[0], last3[1], last3[2]
+    if float(c3[2]) > float(c1[1]) and float(c2[3]) > float(c1[3]):
         return "BUY"        # bullish FVG (gap naik)
-    if float(c3.high) < float(c1.low) and float(c2.close) < float(c1.close):
+    if float(c3[1]) < float(c1[2]) and float(c2[3]) < float(c1[3]):
         return "SELL"       # bearish FVG (gap turun)
     return None
 
 
 # ---------------- Signal Engine ----------------
 def build_scores(gold, dxy):
-    close = float(gold["close"].iloc[-1])
-    ema20 = float(gold["close"].ewm(span=20).mean().iloc[-1])
+    close = float(gold["close"].values[-1])
+    ema20 = float(gold["close"].ewm(span=20).mean().values[-1])
     kf = kalman_series(gold["close"].values)
     kf_now = float(kf[-1])
 
     # 1) Intermarket DXY (bias invers: DXY turun -> gold naik)
     if dxy is not None and len(dxy) > 50:
-        dxy_now = float(dxy["close"].iloc[-1])
-        dxy_sma = float(dxy["close"].rolling(50).mean().iloc[-1])
+        dxy_now = float(dxy["close"].values[-1])
+        dxy_sma = float(dxy["close"].rolling(50).mean().values[-1])
         dxy_sig = 1.0 if dxy_now < dxy_sma else -1.0
     else:
         dxy_sig = 0.0
@@ -294,7 +307,7 @@ def recap_open_positions():
     gold, _ = get_market_data()
     if gold is None:
         return
-    last_price = float(gold["close"].iloc[-1])
+    last_price = float(gold["close"].values[-1])
     now = datetime.now(WIB)
 
     for t in journal:
@@ -340,7 +353,7 @@ def make_chart(res, entry, sl, tp3, signal):
     fig, ax = plt.subplots(figsize=(10, 5))
     fig.patch.set_facecolor("#0e0e0e")
     ax.set_facecolor("#0e0e0e")
-    ax.plot(df.index, df["close"], color="#FFD700", linewidth=2,
+    ax.plot(df.index, df["close"].values, color="#FFD700", linewidth=2,
             label=f"Gold {res['close']:.2f}")
     ax.axhline(entry, color="white", ls="--", lw=1.4, label=f"ENTRY {entry:.2f}")
     ax.axhline(sl, color="#FF3B3B", lw=1.3, label=f"SL {sl:.2f}")
@@ -375,7 +388,7 @@ def main():
         log("Market tutup (early Monday)")
         return 0
 
-    log("INIT OMNI-BOT v26 ...")
+    log("INIT OMNI-BOT v26.1 ...")
     recap_open_positions()          # 1) tutup posisi lama yang kena TP/SL dulu
 
     res = analyze()                 # 2) sinyal baru
