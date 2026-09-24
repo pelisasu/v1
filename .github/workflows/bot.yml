@@ -21,7 +21,8 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy requests websocket-client matplotlib
+          # Added yfinance and pytz to match the bot.py requirements
+          pip install yfinance pytz pandas numpy requests websocket-client matplotlib
 
       - name: Run Algorithmic Trading Bot
         env:
